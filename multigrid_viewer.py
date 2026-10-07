@@ -3,7 +3,7 @@
 多格看圖器 MultiGrid Viewer  v1.0  (2026/10/8)
 Copyright (c) 2026 Skypray Huang — MIT License
 
-需求: Python 3.9+   ->   pip install -r requirements.txt
+需求: Python 3.10+ (建議 3.13)   ->   pip install -r requirements.txt
 執行: python multigrid_viewer.py [圖片或資料夾 ...]
 
 操作

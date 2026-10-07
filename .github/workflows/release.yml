@@ -1,0 +1,74 @@
+# Build MultiGridViewer.exe on Windows, sign it with SignPath (when configured),
+# and publish it as a GitHub Release.  Trigger: push a tag such as v1.0.0
+name: Build and release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write     # create the release
+  actions: read       # let SignPath fetch the uploaded artifact
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build exe
+        run: >
+          pyinstaller --noconfirm --windowed --onefile
+          --collect-all pillow_heif
+          --version-file version_info.txt
+          --name MultiGridViewer multigrid_viewer.py
+
+      - name: Upload unsigned exe
+        id: upload-unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: MultiGridViewer-unsigned
+          path: dist/MultiGridViewer.exe
+
+      # Runs only after you set the repository variable SIGNPATH_ORGANIZATION_ID
+      # and the secret SIGNPATH_API_TOKEN (SignPath gives you both after approval).
+      - name: Sign with SignPath
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'MultiGridViewer' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      - name: Pick the file to release
+        shell: pwsh
+        run: |
+          if (Test-Path signed/MultiGridViewer.exe) {
+            Copy-Item signed/MultiGridViewer.exe release.exe
+            Get-AuthenticodeSignature release.exe | Format-List
+          } else {
+            Write-Host "SignPath not configured yet: releasing the unsigned build"
+            Copy-Item dist/MultiGridViewer.exe release.exe
+          }
+          New-Item -ItemType Directory -Force out | Out-Null
+          Move-Item release.exe out/MultiGridViewer.exe
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/MultiGridViewer.exe

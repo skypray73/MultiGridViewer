@@ -20,7 +20,7 @@ A grid-based offline image viewer for side-by-side comparison. Each panel browse
 
 ## 安裝與執行
 
-需要 Python 3.9 以上。
+需要 Python 3.10 以上（建議 3.13，已測試）。
 
 ```bash
 pip install -r requirements.txt
@@ -48,6 +48,15 @@ Windows 可直接雙擊 `run_viewer.bat`（第一次會自動安裝套件）。
 | 隱藏工具列 | `H`；隱藏後按左上角 ☰ 叫回 |
 | 全螢幕 | `F` 或 `F11`，`Esc` 離開 |
 | 關於 | `F1` |
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+- Committers and reviewers: [Skypray Huang](https://github.com/)
+- Approvers: [Skypray Huang](https://github.com/)
+
+Privacy policy: This program will not transfer any information to other networked systems. It only reads the image files and folders that the user opens.
 
 ## 授權
 

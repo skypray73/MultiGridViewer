@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Paste this into SignPath > Project > Artifact Configurations.
+     upload-artifact wraps files in a ZIP, so the root element is <zip-file>. -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="MultiGridViewer.exe" product-name="MultiGrid Viewer" product-version="1.0.0.0">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>
