@@ -3,7 +3,7 @@
      upload-artifact wraps files in a ZIP, so the root element is <zip-file>. -->
 <artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
   <zip-file>
-    <pe-file path="MultiGridViewer.exe" product-name="MultiGrid Viewer" product-version="1.0.0.0">
+    <pe-file path="MultiGridViewer.exe" product-name="MultiGrid Viewer" product-version="1.1.0.0">
       <authenticode-sign />
     </pe-file>
   </zip-file>
