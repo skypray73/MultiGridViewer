@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-多格看圖器 MultiGrid Viewer  v1.1  (2026/10/8)
+多格看圖器 MultiGrid Viewer  v1.1.1  (2026/10/11)
 Copyright (c) 2026 Skypray Huang — MIT License
 
 需求: Python 3.10+ (建議 3.13)   ->   pip install -r requirements.txt
@@ -35,7 +35,7 @@ import tempfile
 import zipfile
 from collections import OrderedDict
 
-from PySide6.QtCore import QFile, Qt, QPointF, QRectF, QSettings, QTimer, Signal
+from PySide6.QtCore import QEvent, QFile, Qt, QPointF, QRectF, QSettings, QTimer, Signal
 from PySide6.QtGui import (QColor, QFont, QFontMetrics, QImage, QImageReader,
                            QPainter, QPen, QPixmap)
 from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFileDialog, QGridLayout,
@@ -58,8 +58,8 @@ except Exception:
 
 APP_NAME = "多格看圖器"
 APP_NAME_EN = "MultiGrid Viewer"
-__version__ = "1.1"
-RELEASE_DATE = "2026/10/8"
+__version__ = "1.1.1"
+RELEASE_DATE = "2026/10/11"
 AUTHOR = "Skypray Huang"
 GITHUB_URL = "https://github.com/skypray73/MultiGridViewer"
 IMG_EXT = {".jpg", ".jpeg", ".jfif", ".png", ".gif", ".bmp", ".webp", ".tif",
@@ -937,7 +937,8 @@ class Viewer(QMainWindow):
 
 
 class ConfirmDialog(QDialog):
-    """Yes/No box: click a button, or press Left/Right to choose and Enter to confirm. Defaults to the safe choice."""
+    """Yes/No box, fully keyboard driven: Left/Right choose, Enter confirms the focused button
+    (Y = yes, Esc / N = no).  Opens with the safe choice (cancel) focused."""
 
     def __init__(self, parent, title, text, yes_text, no_text="取消"):
         super().__init__(parent)
@@ -950,7 +951,7 @@ class ConfirmDialog(QDialog):
         msg = QLabel(text)
         msg.setWordWrap(True)
         lay.addWidget(msg)
-        hint = QLabel("← → 選擇，Enter 確認，Esc 取消")
+        hint = QLabel("← → 選擇　Enter 確認　Y 是　Esc 取消")
         hint.setObjectName("aboutMuted")
         lay.addWidget(hint)
         row = QHBoxLayout()
@@ -961,34 +962,56 @@ class ConfirmDialog(QDialog):
             b.setMinimumWidth(90)
             b.setAutoDefault(False)
             b.clicked.connect(fn)
+            b.installEventFilter(self)
             row.addWidget(b)
             self.btns.append(b)
         lay.addLayout(row)
-        self.sel = 1                                # cancel is preselected
-        self._mark()
+        self._mark(1)
 
-    def _mark(self):
-        for i, b in enumerate(self.btns):
-            b.setObjectName("primary" if i == self.sel else "")
+    def _mark(self, i):
+        for j, b in enumerate(self.btns):
+            b.setObjectName("primary" if j == i else "")
             b.style().unpolish(b)
             b.style().polish(b)
-        self.btns[self.sel].setFocus()
+
+    def _focus(self, i):
+        self.btns[i].setFocus()
+        self._mark(i)
+
+    def _handle(self, k):
+        cur = next((i for i, b in enumerate(self.btns) if b.hasFocus()), 1)
+        if k in (Qt.Key_Left, Qt.Key_Up):
+            self._focus(0)
+        elif k in (Qt.Key_Right, Qt.Key_Down):
+            self._focus(1)
+        elif k in (Qt.Key_Tab, Qt.Key_Backtab):
+            self._focus(1 - cur)
+        elif k in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self.btns[cur].click()                  # whichever button really has the focus
+        elif k == Qt.Key_Y:
+            self.btns[0].click()
+        elif k == Qt.Key_N:
+            self.btns[1].click()
+        else:
+            return False
+        return True
+
+    def eventFilter(self, obj, e):
+        if e.type() == QEvent.KeyPress and obj in self.btns and self._handle(e.key()):
+            return True
+        if e.type() == QEvent.FocusIn and obj in self.btns:
+            self._mark(self.btns.index(obj))
+        return super().eventFilter(obj, e)
 
     def keyPressEvent(self, e):
-        k = e.key()
-        if k in (Qt.Key_Left, Qt.Key_Up):
-            self.sel = 0
-            self._mark()
-        elif k in (Qt.Key_Right, Qt.Key_Down):
-            self.sel = 1
-            self._mark()
-        elif k in (Qt.Key_Tab, Qt.Key_Backtab):
-            self.sel = 1 - self.sel
-            self._mark()
-        elif k in (Qt.Key_Return, Qt.Key_Enter):
-            self.btns[self.sel].click()
-        else:
+        if not self._handle(e.key()):
             super().keyPressEvent(e)
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self.raise_()
+        self.activateWindow()
+        QTimer.singleShot(0, lambda: self._focus(1))     # make sure the keyboard goes to this box
 
 
 HELP_HTML = f"""
@@ -1018,7 +1041,7 @@ HELP_HTML = f"""
 </table>
 <h3>刪除圖片</h3>
 <p>按 <b>Delete</b>（或工具列「刪除圖片」）刪除目前選取格的圖片。會先跳出確認視窗：
-用滑鼠點按鈕，或按 <b>←</b> <b>→</b> 選擇後按 <b>Enter</b> 確認，<b>Esc</b> 取消。預設選中「取消」。
+全程可只用鍵盤：按 <b>←</b> 選「刪除」後按 <b>Enter</b>（或直接按 <b>Y</b>）確認；<b>Esc</b> 取消。也可以用滑鼠點按鈕。預設選中「取消」。
 圖片會移到<b>資源回收筒</b>，可以還原。壓縮檔內的圖片只會從清單移除，不會修改壓縮檔。</p>
 <h3>縮放與平移</h3>
 <ul>

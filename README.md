@@ -10,7 +10,7 @@
 
 A grid-based offline image viewer for side-by-side comparison. Each panel browses its own folder and keeps its own zoom.
 
-**版本** 1.1 · 2026/10/8 · **製作人** Skypray Huang · **授權** MIT
+**版本** 1.1.1 · 2026/10/11 · **製作人** Skypray Huang · **授權** MIT
 
 ## 下載
 
@@ -53,7 +53,7 @@ Windows 可直接雙擊 `run_viewer.bat`（第一次會自動安裝套件）。
 | 選格 | 點一下某一格（金色框 = 已選取） |
 | 上一張 / 下一張 | 單張模式：滾輪、← → ↑ ↓、PageUp / PageDown、空白鍵、工具列按鈕（只換已選格）。漫畫模式：← → ↑ ↓ 移動 1 張；滾輪、PageUp / PageDown、空白鍵翻整頁 |
 | 第一張 / 最後一張 | Home / End（資料夾或壓縮檔的第一張 / 最後一張） |
-| 刪除圖片 | Delete → 確認視窗：點按鈕，或 ← → 選擇後按 Enter（預設為「取消」，Esc 取消）；移到資源回收筒 |
+| 刪除圖片 | Delete → 確認視窗：點按鈕，或 ← 選「刪除」後按 Enter（或直接按 Y）；全程可只用鍵盤。預設為「取消」，Esc 取消；移到資源回收筒 |
 | 切換模式 | 工具列「單張模式 / 漫畫模式」，或 `M` |
 | 放大 / 縮小 | 每格右側 ＋ / −、Ctrl+滾輪（以游標為中心）、鍵盤 + / - |
 | 恢復原始填滿 | `/` 或 `0`（已選格）；`*`（全部格子）；或每格右側 1:1 |
