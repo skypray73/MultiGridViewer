@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-多格看圖器 MultiGrid Viewer  v1.1.1  (2026/10/11)
+多格看圖器 MultiGrid Viewer  v1.1.2  (2026/10/11)
 Copyright (c) 2026 Skypray Huang — MIT License
 
 需求: Python 3.10+ (建議 3.13)   ->   pip install -r requirements.txt
@@ -58,7 +58,7 @@ except Exception:
 
 APP_NAME = "多格看圖器"
 APP_NAME_EN = "MultiGrid Viewer"
-__version__ = "1.1.1"
+__version__ = "1.1.2"
 RELEASE_DATE = "2026/10/11"
 AUTHOR = "Skypray Huang"
 GITHUB_URL = "https://github.com/skypray73/MultiGridViewer"
@@ -951,7 +951,7 @@ class ConfirmDialog(QDialog):
         msg = QLabel(text)
         msg.setWordWrap(True)
         lay.addWidget(msg)
-        hint = QLabel("← → 選擇　Enter 確認　Y 是　Esc 取消")
+        hint = QLabel("再按一次 Delete（或 Y）確認　← → 選擇、Enter　Esc 取消")
         hint.setObjectName("aboutMuted")
         lay.addWidget(hint)
         row = QHBoxLayout()
@@ -988,7 +988,7 @@ class ConfirmDialog(QDialog):
             self._focus(1 - cur)
         elif k in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
             self.btns[cur].click()                  # whichever button really has the focus
-        elif k == Qt.Key_Y:
+        elif k in (Qt.Key_Y, Qt.Key_Delete):          # Delete again = confirm
             self.btns[0].click()
         elif k == Qt.Key_N:
             self.btns[1].click()
@@ -1041,7 +1041,7 @@ HELP_HTML = f"""
 </table>
 <h3>刪除圖片</h3>
 <p>按 <b>Delete</b>（或工具列「刪除圖片」）刪除目前選取格的圖片。會先跳出確認視窗：
-全程可只用鍵盤：按 <b>←</b> 選「刪除」後按 <b>Enter</b>（或直接按 <b>Y</b>）確認；<b>Esc</b> 取消。也可以用滑鼠點按鈕。預設選中「取消」。
+全程可只用鍵盤：<b>再按一次 Delete</b>（或按 <b>Y</b>）即確認刪除；也可按 <b>←</b> 選「刪除」後按 <b>Enter</b>；<b>Esc</b> 取消。刪除後會顯示<b>下一張</b>，沒有下一張就顯示<b>上一張</b>。也可以用滑鼠點按鈕。預設選中「取消」。
 圖片會移到<b>資源回收筒</b>，可以還原。壓縮檔內的圖片只會從清單移除，不會修改壓縮檔。</p>
 <h3>縮放與平移</h3>
 <ul>
