@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-多格看圖器 MultiGrid Viewer  v1.1.2  (2026/10/11)
+多格看圖器 MultiGrid Viewer  v1.1.3  (2026/10/13)
 Copyright (c) 2026 Skypray Huang — MIT License
 
 需求: Python 3.10+ (建議 3.13)   ->   pip install -r requirements.txt
@@ -17,7 +17,7 @@ Copyright (c) 2026 Skypray Huang — MIT License
   刪除圖片     Delete（會先跳出確認視窗，←/→ 或滑鼠選擇，Enter 確認，圖片移到資源回收筒）
   壓縮檔       可拖入 ZIP / RAR / 7Z（CBZ/CBR/CB7），自動讀取內部圖片
   模式         單張模式（每格各自瀏覽）/ 漫畫模式（所有格共用同一資料夾或壓縮檔，PageDown 翻整頁），M 鍵切換
-  縮放         每格右側 + / − / 1:1、Ctrl+滾輪(以游標為中心)、鍵盤 + -
+  縮放         滑鼠移到每格右側邊緣顯示 + / − / 1:1、Ctrl+滾輪(以游標為中心)、鍵盤 + -
   恢復填滿     /（或 0）= 已選格回到原本等比延伸畫面；* = 全部格子恢復
                縮放後切換上/下一張，倍率與位置會保留
   平移         按住左鍵拖曳；雙擊 = 放大 2 倍 / 還原
@@ -36,7 +36,7 @@ import zipfile
 from collections import OrderedDict
 
 from PySide6.QtCore import QEvent, QFile, Qt, QPointF, QRectF, QSettings, QTimer, Signal
-from PySide6.QtGui import (QColor, QFont, QFontMetrics, QImage, QImageReader,
+from PySide6.QtGui import (QColor, QCursor, QFont, QFontMetrics, QImage, QImageReader,
                            QPainter, QPen, QPixmap)
 from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFileDialog, QGridLayout,
                                QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton,
@@ -58,8 +58,8 @@ except Exception:
 
 APP_NAME = "多格看圖器"
 APP_NAME_EN = "MultiGrid Viewer"
-__version__ = "1.1.2"
-RELEASE_DATE = "2026/10/11"
+__version__ = "1.1.3"
+RELEASE_DATE = "2026/10/13"
 AUTHOR = "Skypray Huang"
 GITHUB_URL = "https://github.com/skypray73/MultiGridViewer"
 IMG_EXT = {".jpg", ".jpeg", ".jfif", ".png", ".gif", ".bmp", ".webp", ".tif",
@@ -239,6 +239,7 @@ class Cell(QWidget):
         self.setFocusPolicy(Qt.NoFocus)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMinimumSize(80, 80)
+        self.setMouseTracking(True)
 
         # zoom rail on the right edge
         self.rail = QWidget(self)
@@ -255,6 +256,24 @@ class Cell(QWidget):
         for w in (self.b_in, self.pct, self.b_out, self.b_reset):
             lay.addWidget(w, 0, Qt.AlignHCenter)
         self.rail.adjustSize()
+        self.rail.hide()
+        # Track the cursor over the child buttons as well as the panel itself.
+        self._rail_timer = QTimer(self)
+        self._rail_timer.setInterval(50)
+        self._rail_timer.timeout.connect(self._update_zoom_rail)
+
+    def _update_zoom_rail(self, pos=None):
+        if pos is None:
+            pos = self.mapFromGlobal(QCursor.pos())
+        inside = self.rect().contains(pos)
+        near_edge = pos.x() >= self.width() - 20
+        over_rail = self.rail.isVisible() and self.rail.geometry().contains(pos)
+        visible = bool(self.current()) and inside and (near_edge or over_rail)
+        self.rail.setVisible(visible)
+        if visible:
+            self._rail_timer.start()
+        else:
+            self._rail_timer.stop()
 
     def _zbtn(self, text, tip, fn):
         b = QPushButton(text)
@@ -325,7 +344,9 @@ class Cell(QWidget):
         p.setRenderHint(QPainter.SmoothPixmapTransform)
         p.setRenderHint(QPainter.Antialiasing)
         path = self.current()
-        self.rail.setVisible(bool(path))
+        if not path:
+            self.rail.hide()
+            self._rail_timer.stop()
         self.pct.setText(f"{round(self.scale * 100)}%")
 
         if not path:
@@ -383,6 +404,14 @@ class Cell(QWidget):
         super().resizeEvent(e)
 
     # ----- mouse -----
+    def enterEvent(self, e):
+        self._update_zoom_rail(e.position().toPoint())
+        super().enterEvent(e)
+
+    def leaveEvent(self, e):
+        self._update_zoom_rail()
+        super().leaveEvent(e)
+
     def mousePressEvent(self, e):
         self.pressed.emit(self)
         if e.button() == Qt.LeftButton:
@@ -390,6 +419,7 @@ class Cell(QWidget):
             self.setCursor(Qt.ClosedHandCursor)
 
     def mouseMoveEvent(self, e):
+        self._update_zoom_rail(e.position().toPoint())
         if self._drag:
             start, off0 = self._drag
             self.off = off0 + (e.position() - start)
