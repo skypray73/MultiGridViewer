@@ -16,7 +16,7 @@ Copyright (c) 2026 Skypray Huang — MIT License
   第一/最後    Home / End
   刪除圖片     Delete（會先跳出確認視窗，←/→ 或滑鼠選擇，Enter 確認，圖片移到資源回收筒）
   壓縮檔       可拖入 ZIP / RAR / 7Z（CBZ/CBR/CB7），自動讀取內部圖片
-  影片         影片模式：每格單部循環，預設等比填滿；空白鍵播放／暫停，方向鍵／PageDown 下一部
+  影片         影片模式：每格單部循環，預設等比填滿；空白鍵播放／暫停，PageUp 上一部／PageDown 下一部
   模式         單張模式（每格各自瀏覽）/ 漫畫模式（所有格共用同一資料夾或壓縮檔，PageDown 翻整頁），M 鍵切換
   縮放         滑鼠移到每格右側邊緣顯示 + / − / 1:1、Ctrl+滾輪(以游標為中心)、鍵盤 + -
   恢復填滿     /（或 0）= 已選格回到原本等比延伸畫面；* = 全部格子恢復
@@ -271,7 +271,8 @@ class Cell(QWidget):
         self.video_buttons = [
             self._zbtn("▶", "開始／繼續播放", self.play_video),
             self._zbtn("Ⅱ", "暫停", self.pause_video),
-            self._zbtn("⏭", "下一部影片", lambda: self.viewer.nav(1)),
+            self._zbtn("⏮", "上一部影片（PageUp）", lambda: self.viewer.nav(-1)),
+            self._zbtn("⏭", "下一部影片（PageDown）", lambda: self.viewer.nav(1)),
         ]
         for button in self.video_buttons:
             lay.addWidget(button, 0, Qt.AlignHCenter)
@@ -719,12 +720,17 @@ class Viewer(QMainWindow):
         self.addToolBar(Qt.TopToolBarArea, self.video_tb)
         for label, callback in (("▶ 開始", lambda: self.cells[self.active].play_video()),
                                 ("Ⅱ 暫停", lambda: self.cells[self.active].pause_video()),
+                                ("◀ 上一部", lambda: self.nav(-1)),
                                 ("下一部 ▶", lambda: self.nav(1))):
             button = QPushButton(label)
             button.setFocusPolicy(Qt.NoFocus)
+            if "上一部" in label:
+                button.setToolTip("上一部影片（PageUp）")
+            elif "下一部" in label:
+                button.setToolTip("下一部影片（PageDown）")
             button.clicked.connect(callback)
             self.video_tb.addWidget(button)
-        self.video_tb.addWidget(QLabel("  單部循環 · 聲音只播放已選格 · 空白鍵播放／暫停  "))
+        self.video_tb.addWidget(QLabel("  PageUp 上一部／PageDown 下一部 · 空白鍵播放／暫停 · 單部循環 · 已選格發聲  "))
 
     def sync_controls(self):
         for sp, v in ((self.sp_cols, self.cols), (self.sp_rows, self.rows)):
@@ -1254,7 +1260,7 @@ HELP_HTML = f"""
 <li><b>漫畫模式</b>：所有格子共用同一個資料夾或壓縮檔，像看漫畫一樣依序排列。
 例如選 2×1，按 <b>PageDown</b> 就換成接下來的 2 張；<b>PageUp</b> 回上一頁。在漫畫模式拖入資料夾/壓縮檔會一併取代所有格。</li>
 </ul>
-<h3>影片模式</h3><p>選「影片模式」後開啟影片資料夾，或直接拖入影片自動切換。每格獨立循環播放目前影片；預設保留長寬比例填滿（邊緣裁切），「顯示」可改完整顯示。工具列或右側邊緣浮出的按鈕可開始、暫停、下一部；空白鍵播放／暫停，方向鍵／PageDown 切換影片。只有已選格播放聲音。支援 MP4、MKV、MOV、WebM、AVI 等；實際格式依編碼而定。</p><h3>排列</h3>
+<h3>影片模式</h3><p>選「影片模式」後開啟影片資料夾，或直接拖入影片自動切換。每格獨立循環播放目前影片；預設保留長寬比例填滿（邊緣裁切），「顯示」可改完整顯示。工具列或右側邊緣浮出的按鈕可開始、暫停、上一部、下一部；空白鍵播放／暫停，PageUp 上一部、PageDown 下一部（方向鍵也可切換）。只有已選格播放聲音。支援 MP4、MKV、MOV、WebM、AVI 等；實際格式依編碼而定。</p><h3>排列</h3>
 <p>工具列選 1×1、2×1、2×2… 或自行輸入 橫×直（最多 8×8）。「顯示」可選等比延伸、等比填滿、原始大小。</p>
 <h3>翻頁與跳轉</h3>
 <table cellpadding="3">

@@ -81,7 +81,7 @@ def package():
     (folder / '使用說明.txt').write_text(
         '請完整解壓縮 ZIP，再執行 MultiGridViewer.exe。\n'
         '保留 _internal 資料夾，內含 Python、Qt、FFmpeg DLL 與圖片解碼元件。\n'
-        '影片模式：每格單部循環；右側邊緣浮出播放／暫停／下一部。\n'
+        '影片模式：每格單部循環；右側邊緣浮出播放／暫停／上一部／下一部；PageUp 上一部、PageDown 下一部。\n'
         '預設等比填滿（邊緣裁切）；顯示選單可切換完整顯示。\n', encoding='utf-8')
     archive = Path(shutil.make_archive(str(ROOT / 'dist/MultiGridViewer-Portable-v1.2.0'),
                                       'zip', folder.parent, folder.name))
