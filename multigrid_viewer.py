@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-多格看圖器 MultiGrid Viewer  v1.1.3  (2026/10/13)
+多格看圖器 MultiGrid Viewer  v1.2.0  (2026/10/18)
 Copyright (c) 2026 Skypray Huang — MIT License
 
 需求: Python 3.10+ (建議 3.13)   ->   pip install -r requirements.txt
@@ -16,6 +16,7 @@ Copyright (c) 2026 Skypray Huang — MIT License
   第一/最後    Home / End
   刪除圖片     Delete（會先跳出確認視窗，←/→ 或滑鼠選擇，Enter 確認，圖片移到資源回收筒）
   壓縮檔       可拖入 ZIP / RAR / 7Z（CBZ/CBR/CB7），自動讀取內部圖片
+  影片         影片模式：每格單部循環，預設等比填滿；空白鍵播放／暫停，方向鍵／PageDown 下一部
   模式         單張模式（每格各自瀏覽）/ 漫畫模式（所有格共用同一資料夾或壓縮檔，PageDown 翻整頁），M 鍵切換
   縮放         滑鼠移到每格右側邊緣顯示 + / − / 1:1、Ctrl+滾輪(以游標為中心)、鍵盤 + -
   恢復填滿     /（或 0）= 已選格回到原本等比延伸畫面；* = 全部格子恢復
@@ -35,7 +36,8 @@ import tempfile
 import zipfile
 from collections import OrderedDict
 
-from PySide6.QtCore import QEvent, QFile, Qt, QPointF, QRectF, QSettings, QTimer, Signal
+from PySide6.QtCore import QEvent, QFile, Qt, QPointF, QRectF, QSettings, QTimer, QUrl, Signal
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
 from PySide6.QtGui import (QColor, QCursor, QFont, QFontMetrics, QImage, QImageReader,
                            QPainter, QPen, QPixmap)
 from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFileDialog, QGridLayout,
@@ -58,13 +60,15 @@ except Exception:
 
 APP_NAME = "多格看圖器"
 APP_NAME_EN = "MultiGrid Viewer"
-__version__ = "1.1.3"
-RELEASE_DATE = "2026/10/13"
+__version__ = "1.2.0"
+RELEASE_DATE = "2026/10/18"
 AUTHOR = "Skypray Huang"
 GITHUB_URL = "https://github.com/skypray73/MultiGridViewer"
 IMG_EXT = {".jpg", ".jpeg", ".jfif", ".png", ".gif", ".bmp", ".webp", ".tif",
            ".tiff", ".ico", ".avif", ".heic", ".heif", ".jp2", ".tga"}
 ARC_EXT = {".zip", ".cbz", ".rar", ".cbr", ".7z", ".cb7"}
+VIDEO_EXT = {".mp4", ".mkv", ".mov", ".webm", ".avi", ".m4v", ".wmv",
+             ".mpeg", ".mpg", ".ts", ".mts", ".m2ts", ".flv"}
 PRESETS = [(1, 1), (2, 1), (1, 2), (2, 2), (3, 1), (4, 1), (3, 2), (3, 3)]
 FIT_MODES = [("contain", "等比延伸（完整顯示）"),
              ("cover", "等比填滿（裁切邊緣）"),
@@ -84,6 +88,10 @@ def natural_key(s):
 
 def is_img(path):
     return os.path.splitext(path)[1].lower() in IMG_EXT
+
+
+def is_video(path):
+    return os.path.splitext(path)[1].lower() in VIDEO_EXT
 
 
 def is_archive(path):
@@ -175,16 +183,17 @@ def load_pixmap(path):
     return None
 
 
-def list_folder(folder, recursive=False):
+def list_folder(folder, recursive=False, videos=False):
     out = []
+    accepts = is_video if videos else is_img
     if recursive:
         for root, dirs, files in os.walk(folder):
             dirs.sort(key=natural_key)
-            out += [os.path.join(root, f) for f in files if is_img(f)]
+            out += [os.path.join(root, f) for f in files if accepts(f)]
     else:
         try:
             out = [os.path.join(folder, f) for f in os.listdir(folder)
-                   if is_img(f) and os.path.isfile(os.path.join(folder, f))]
+                   if accepts(f) and os.path.isfile(os.path.join(folder, f))]
         except OSError:
             out = []
     out.sort(key=lambda p: natural_key(os.path.relpath(p, folder)))
@@ -235,6 +244,10 @@ class Cell(QWidget):
         self.drop_hover = False
         self._drag = None
         self._wheel = 0
+        self.player = self.audio = self.sink = None
+        self._video_path = None
+        self._video_image = QImage()
+        self._video_error = ""
         self.setAcceptDrops(True)
         self.setFocusPolicy(Qt.NoFocus)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -255,6 +268,14 @@ class Cell(QWidget):
         self.b_reset = self._zbtn("1:1", "恢復原始填滿 ( / )", self.reset_zoom)
         for w in (self.b_in, self.pct, self.b_out, self.b_reset):
             lay.addWidget(w, 0, Qt.AlignHCenter)
+        self.video_buttons = [
+            self._zbtn("▶", "開始／繼續播放", self.play_video),
+            self._zbtn("Ⅱ", "暫停", self.pause_video),
+            self._zbtn("⏭", "下一部影片", lambda: self.viewer.nav(1)),
+        ]
+        for button in self.video_buttons:
+            lay.addWidget(button, 0, Qt.AlignHCenter)
+            button.hide()
         self.rail.adjustSize()
         self.rail.hide()
         # Track the cursor over the child buttons as well as the panel itself.
@@ -290,18 +311,21 @@ class Cell(QWidget):
 
     def set_items(self, items, idx=0):
         self.items, self.idx = items, max(0, min(idx, len(items) - 1)) if items else 0
+        self.sync_media()
         self.reset_zoom()
 
     def step(self, d):
         if not self.items:
             return
         self.idx = (self.idx + d) % len(self.items)
+        self.sync_media()
         self.update()
         self.preload()
 
     def jump(self, i):
         if self.items:
             self.idx = max(0, min(i, len(self.items) - 1))
+            self.sync_media()
             self.update()
             self.preload()
 
@@ -310,6 +334,70 @@ class Cell(QWidget):
             n = len(self.items)
             nxt, prv = self.items[(self.idx + 1) % n], self.items[(self.idx - 1) % n]
             QTimer.singleShot(30, lambda: (self.viewer.cache.get(nxt), self.viewer.cache.get(prv)))
+
+    # Video frames share the image canvas, so selection, captions, hover controls,
+    # zoom and pan work without a native video window covering the overlays.
+    def sync_media(self):
+        video = self.viewer.mode == "video"
+        for widget in (self.b_in, self.pct, self.b_out, self.b_reset):
+            widget.setVisible(not video)
+        for button in self.video_buttons:
+            button.setVisible(video)
+        self.rail.adjustSize()
+        self.position_rail()
+        path = self.current() if video else None
+        if not path or not is_video(path):
+            self.stop_video()
+            return
+        if path == self._video_path:
+            return
+        self.stop_video()
+        if self.player is None:
+            self.player = QMediaPlayer(self)
+            self.audio = QAudioOutput(self)
+            self.sink = QVideoSink(self)
+            self.player.setAudioOutput(self.audio)
+            self.player.setVideoSink(self.sink)
+            self.player.setLoops(QMediaPlayer.Infinite)
+            self.sink.videoFrameChanged.connect(self._video_frame)
+            self.player.errorOccurred.connect(self._video_failed)
+        self._video_path = path
+        self.audio.setMuted(not self.selected)
+        self.player.setSource(QUrl.fromLocalFile(os.path.abspath(path)))
+        self.player.play()
+
+    def _video_frame(self, frame):
+        if self._video_path and self._video_path == self.current() and frame.isValid():
+            self._video_image = frame.toImage()
+            self.update()
+
+    def _video_failed(self, error, message):
+        if self._video_path:
+            self._video_error = message or "無法解碼此影片"
+            self.update()
+
+    def stop_video(self):
+        self._video_path = None
+        if self.player is not None:
+            self.player.stop()
+            self.player.setSource(QUrl())
+        self._video_image = QImage()
+        self._video_error = ""
+
+    def play_video(self):
+        self.sync_media()
+        if self._video_path:
+            self.player.play()
+
+    def pause_video(self):
+        if self.player is not None:
+            self.player.pause()
+
+    def toggle_video(self):
+        if self.player is not None and self.player.playbackState() == QMediaPlayer.PlayingState:
+            self.pause_video()
+        else:
+            self.play_video()
 
     # ----- zoom / pan -----
     def zoom_at(self, factor, p):
@@ -328,7 +416,7 @@ class Cell(QWidget):
 
     def base_rect(self, pm):
         W, H, w, h = self.width(), self.height(), pm.width(), pm.height()
-        mode = self.viewer.fit
+        mode = self.viewer.video_fit if self.viewer.mode == "video" else self.viewer.fit
         if mode == "contain":
             s = min(W / w, H / h)
         elif mode == "cover":
@@ -353,12 +441,18 @@ class Cell(QWidget):
             p.setPen(C_MUTED)
             f = QFont(self.font()); f.setPointSize(11); p.setFont(f)
             p.drawText(self.rect(), Qt.AlignCenter,
+                       "把影片或影片資料夾拖到這一格\n（或雙擊這裡開啟資料夾）" if self.viewer.mode == "video" else
                        "— 沒有更多圖片了 —" if self.items else
                        "把資料夾、壓縮檔或圖片拖到這一格\n（或雙擊這裡開啟資料夾）" if self.viewer.mode == "single" else
                        "把資料夾、壓縮檔或圖片拖進來\n（或雙擊這裡開啟資料夾）")
         else:
-            pm = self.viewer.cache.get(path)
-            if pm is None:
+            video = self.viewer.mode == "video"
+            pm = self._video_image if video else self.viewer.cache.get(path)
+            if video and (self._video_error or pm.isNull()):
+                p.setPen(C_MUTED)
+                p.drawText(self.rect().adjusted(20, 20, -65, -30), Qt.AlignCenter | Qt.TextWordWrap,
+                           "無法播放影片：\n" + self._video_error if self._video_error else "正在載入影片…")
+            elif pm is None:
                 p.setPen(C_MUTED)
                 p.drawText(self.rect().adjusted(20, 0, -60, 0), Qt.AlignCenter | Qt.TextWordWrap,
                            (f"無法顯示 HEIC：\n請在命令列執行  pip install pillow pillow-heif"
@@ -367,8 +461,11 @@ class Cell(QWidget):
             else:
                 r = self.base_rect(pm)
                 s, o = self.scale, self.off
-                p.drawPixmap(QRectF(o.x() + r.x() * s, o.y() + r.y() * s, r.width() * s, r.height() * s),
-                             pm, QRectF(pm.rect()))
+                target = QRectF(o.x() + r.x() * s, o.y() + r.y() * s, r.width() * s, r.height() * s)
+                if video:
+                    p.drawImage(target, pm, QRectF(pm.rect()))
+                else:
+                    p.drawPixmap(target, pm, QRectF(pm.rect()))
             # caption
             f = QFont(self.font()); f.setPointSize(9); p.setFont(f)
             fm = QFontMetrics(f)
@@ -398,9 +495,12 @@ class Cell(QWidget):
             p.drawText(self.rect(), Qt.AlignCenter, "放到這一格")
         p.end()
 
+    def position_rail(self):
+        self.rail.move(self.width() - self.rail.width() - 8, (self.height() - self.rail.height()) // 2)
+
     def resizeEvent(self, e):
         self.rail.adjustSize()
-        self.rail.move(self.width() - self.rail.width() - 8, (self.height() - self.rail.height()) // 2)
+        self.position_rail()
         super().resizeEvent(e)
 
     # ----- mouse -----
@@ -481,9 +581,11 @@ class Viewer(QMainWindow):
         self.fit = self.settings.value("fit", "contain")
         if self.fit not in dict(FIT_MODES):
             self.fit = "contain"
+        self.video_fit = "cover"
+        self.image_states, self.video_states = [], []
         self.cells, self.active = [], 0
         self.mode = self.settings.value("mode", "single")
-        if self.mode not in ("single", "comic"):
+        if self.mode not in ("single", "comic", "video"):
             self.mode = "single"
         self.comic_items, self.comic_pos = [], 0
         self.tmp_root = None
@@ -518,6 +620,9 @@ class Viewer(QMainWindow):
 
     # ---------- menu ----------
     def _build_menu(self):
+        modes = self.menuBar().addMenu("模式")
+        for key, label in (("single", "單張模式"), ("comic", "漫畫模式"), ("video", "影片模式")):
+            modes.addAction(label, lambda _=False, key=key: self.set_mode(key))
         m = self.menuBar().addMenu("幫助")
         m.addAction("使用說明\tF1", self.show_help)
         m.addAction("關於", self.show_about)
@@ -566,7 +671,8 @@ class Viewer(QMainWindow):
         lbl(" 模式 ")
         self.mode_btns = []
         for key, text, tip in (("single", "單張模式", "每格各自瀏覽自己的資料夾 ( M 切換 )"),
-                               ("comic", "漫畫模式", "所有格共用同一資料夾/壓縮檔，PageDown 翻整頁 ( M 切換 )")):
+                               ("comic", "漫畫模式", "所有格共用同一資料夾/壓縮檔，PageDown 翻整頁 ( M 切換 )"),
+                               ("video", "影片模式", "每格各自循環播放影片，空白鍵播放／暫停")):
             b = QToolButton()
             b.setText(text)
             b.setCheckable(True)
@@ -591,7 +697,7 @@ class Viewer(QMainWindow):
         btn("◀ 上一張", lambda: self.nav(-1))
         btn("下一張 ▶", lambda: self.nav(1))
         btn("開啟資料夾", lambda: self.open_folder(self.cells[self.active]), primary=True)
-        btn("選擇圖片", lambda: self.open_files(self.cells[self.active]))
+        self.open_media_btn = btn("選擇圖片", lambda: self.open_files(self.cells[self.active]))
         btn("清空", self.clear_cell, "清空已選格")
         btn("刪除圖片", self.delete_current, "刪除目前圖片（先確認，移到資源回收筒）( Delete )")
 
@@ -605,6 +711,21 @@ class Viewer(QMainWindow):
         self.status = QLabel(); self.status.setObjectName("status")
         tb.addWidget(self.status)
 
+        # A separate row keeps playback controls accessible on smaller screens.
+        self.addToolBarBreak(Qt.TopToolBarArea)
+        self.video_tb = QToolBar("影片播放")
+        self.video_tb.setMovable(False)
+        self.video_tb.setFloatable(False)
+        self.addToolBar(Qt.TopToolBarArea, self.video_tb)
+        for label, callback in (("▶ 開始", lambda: self.cells[self.active].play_video()),
+                                ("Ⅱ 暫停", lambda: self.cells[self.active].pause_video()),
+                                ("下一部 ▶", lambda: self.nav(1))):
+            button = QPushButton(label)
+            button.setFocusPolicy(Qt.NoFocus)
+            button.clicked.connect(callback)
+            self.video_tb.addWidget(button)
+        self.video_tb.addWidget(QLabel("  單部循環 · 聲音只播放已選格 · 空白鍵播放／暫停  "))
+
     def sync_controls(self):
         for sp, v in ((self.sp_cols, self.cols), (self.sp_rows, self.rows)):
             sp.blockSignals(True); sp.setValue(v); sp.blockSignals(False)
@@ -612,6 +733,12 @@ class Viewer(QMainWindow):
             b.setChecked(c == self.cols and r == self.rows)
         for b, k in self.mode_btns:
             b.setChecked(k == self.mode)
+        self.video_tb.setVisible(self.mode == "video" and self.tb.isVisible())
+        self.open_media_btn.setText("選擇影片" if self.mode == "video" else "選擇圖片")
+        fit = self.video_fit if self.mode == "video" else self.fit
+        self.cb_fit.blockSignals(True)
+        self.cb_fit.setCurrentIndex([key for key, _ in FIT_MODES].index(fit))
+        self.cb_fit.blockSignals(False)
 
     def update_status(self):
         c = self.cells[self.active]
@@ -640,6 +767,7 @@ class Viewer(QMainWindow):
             c.pressed.connect(self.select)
             self.cells.append(c)
         for c in self.cells[n:]:
+            c.stop_video()
             self.grid.removeWidget(c)
             c.hide()
             c.deleteLater()
@@ -659,6 +787,9 @@ class Viewer(QMainWindow):
             self.active = 0
         for i, c in enumerate(self.cells):
             c.selected = i == self.active
+            c.sync_media()
+            if c.audio is not None:
+                c.audio.setMuted(not c.selected)
             c.update()
         self.sync_controls()
         if self.mode == "comic":
@@ -674,8 +805,11 @@ class Viewer(QMainWindow):
         self.central.setFocus()
 
     def set_fit(self, i):
-        self.fit = self.cb_fit.itemData(i)
-        self.settings.setValue("fit", self.fit)
+        if self.mode == "video":
+            self.video_fit = self.cb_fit.itemData(i)
+        else:
+            self.fit = self.cb_fit.itemData(i)
+            self.settings.setValue("fit", self.fit)
         for c in self.cells:
             c.update()
 
@@ -685,6 +819,8 @@ class Viewer(QMainWindow):
             self.active = i
             for j, c in enumerate(self.cells):
                 c.selected = j == i
+                if c.audio is not None:
+                    c.audio.setMuted(not c.selected)
                 c.update()
         self.update_status()
 
@@ -710,6 +846,7 @@ class Viewer(QMainWindow):
     def comic_refresh(self, reset=True):
         for i, c in enumerate(self.cells):
             c.items, c.idx = self.comic_items, self.comic_pos + i
+            c.sync_media()
             if reset:
                 c.reset_zoom()
             else:
@@ -735,9 +872,40 @@ class Viewer(QMainWindow):
         self.comic_goto(new)
 
     def set_mode(self, mode):
+        if mode not in ("single", "comic", "video"):
+            return
         if mode == self.mode:
             self.sync_controls()
             return
+        if mode == "video":
+            self.image_states = [(list(c.items), c.idx) for c in self.cells]
+            self.mode = "video"
+            self.video_fit = "cover"
+            for i, c in enumerate(self.cells):
+                if i < len(self.video_states):
+                    items, pos = self.video_states[i]
+                else:
+                    path = c.current()
+                    items = list_folder(os.path.dirname(path), videos=True) if path else []
+                    pos = 0
+                c.set_items(list(items), pos)
+            self.settings.setValue("mode", self.mode)
+            self.sync_controls()
+            self.update_status()
+            self.central.setFocus()
+            return
+        if self.mode == "video":
+            self.video_states = [(list(c.items), c.idx) for c in self.cells]
+            self.mode = "single"
+            for i, c in enumerate(self.cells):
+                items, pos = self.image_states[i] if i < len(self.image_states) else ([], 0)
+                c.set_items(list(items), pos)
+            if mode == "single":
+                self.settings.setValue("mode", self.mode)
+                self.sync_controls()
+                self.update_status()
+                self.central.setFocus()
+                return
         if mode == "comic":
             cur = self.cells[self.active]
             src = cur if cur.items else next((c for c in self.cells if c.items), None)
@@ -770,15 +938,21 @@ class Viewer(QMainWindow):
             return
         temp = self.is_temp(path)
         name = os.path.basename(path)
-        text = (f"要把這張圖從清單移除嗎？\n\n{name}\n\n（來自壓縮檔，原壓縮檔不會被修改）" if temp
-                else f"要刪除這張圖片嗎？\n\n{name}\n\n（會移到資源回收筒）")
+        noun = "這部影片" if self.mode == "video" else "這張圖片"
+        text = (f"要把{noun}從清單移除嗎？\n\n{name}\n\n（來自壓縮檔，原壓縮檔不會被修改）" if temp
+                else f"要刪除{noun}嗎？\n\n{name}\n\n（會移到資源回收筒）")
         ok = ConfirmDialog(self, "確認刪除", text, "移除" if temp else "刪除").exec() == QDialog.Accepted
         self.central.setFocus()
         if not ok:
             return
+        for x in self.cells:
+            if x.current() == path:
+                x.stop_video()
         if not temp:
             r = QFile.moveToTrash(path)
             if not (r[0] if isinstance(r, tuple) else r):
+                for x in self.cells:
+                    x.sync_media()
                 QMessageBox.warning(self, APP_NAME, f"無法刪除這個檔案：\n{path}")
                 return
         self.cache.pop(path)
@@ -796,6 +970,7 @@ class Viewer(QMainWindow):
                     if i < x.idx:
                         x.idx -= 1
                 x.idx = max(0, min(x.idx, len(x.items) - 1))
+                x.sync_media()
                 x.update()
             c.preload()
         self.update_status()
@@ -831,28 +1006,34 @@ class Viewer(QMainWindow):
     # ---------- loading ----------
     def load_paths(self, cell, paths):
         paths = [p for p in paths if p and os.path.exists(p)]
+        if paths and all(os.path.isfile(p) and is_video(p) for p in paths):
+            self.set_mode("video")
+        elif paths and any(is_img(p) or is_archive(p) for p in paths) and self.mode == "video":
+            self.set_mode("single")
         paths = [self.expand_archive(p) if is_archive(p) else p for p in paths]
         paths = [p for p in paths if p]
         if not paths:
             self.update_status()
             return
         idx = 0
+        videos = self.mode == "video"
+        accepts = is_video if videos else is_img
         if len(paths) == 1 and os.path.isdir(paths[0]):
-            items = list_folder(paths[0], recursive=True)
+            items = list_folder(paths[0], recursive=True, videos=videos)
         elif len(paths) == 1:
             # single image: load every image in the same folder and start at this one
             folder = os.path.dirname(os.path.abspath(paths[0]))
-            items = list_folder(folder)
+            items = list_folder(folder, videos=videos)
             target = os.path.normcase(os.path.abspath(paths[0]))
             norm = [os.path.normcase(os.path.abspath(p)) for p in items]
             if target in norm:
                 idx = norm.index(target)
-            elif is_img(paths[0]):
+            elif accepts(paths[0]):
                 items, idx = [paths[0]], 0
         else:
             items = []
             for p in paths:
-                items += list_folder(p, recursive=True) if os.path.isdir(p) else ([p] if is_img(p) else [])
+                items += list_folder(p, recursive=True, videos=videos) if os.path.isdir(p) else ([p] if accepts(p) else [])
         if not items:
             self.update_status()
             return
@@ -877,9 +1058,13 @@ class Viewer(QMainWindow):
     def open_files(self, cell):
         cur = cell.current()
         start = os.path.dirname(cur) if cur else self.settings.value("lastDir", os.path.expanduser("~"))
-        exts = " ".join("*" + e for e in sorted(IMG_EXT | ARC_EXT))
-        files, _ = QFileDialog.getOpenFileNames(self, "選擇圖片或壓縮檔（只選一張 = 載入整個資料夾）", start,
-                                                f"圖片與壓縮檔 ({exts});;所有檔案 (*)")
+        videos = " ".join("*" + e for e in sorted(VIDEO_EXT))
+        images = " ".join("*" + e for e in sorted(IMG_EXT | ARC_EXT))
+        filters = [f"影片 ({videos})", f"圖片與壓縮檔 ({images})"]
+        if self.mode != "video":
+            filters.reverse()
+        files, _ = QFileDialog.getOpenFileNames(self, "選擇媒體（單檔會載入同資料夾的同類檔案）", start,
+                                                ";;".join(filters) + ";;所有檔案 (*)")
         if files:
             self.settings.setValue("lastDir", os.path.dirname(files[0]))
             self.load_paths(cell, files)
@@ -914,6 +1099,7 @@ class Viewer(QMainWindow):
     # ---------- window ----------
     def set_bar_hidden(self, hidden):
         self.tb.setVisible(not hidden)
+        self.video_tb.setVisible(not hidden and self.mode == "video")
         self.show_bar_btn.setVisible(hidden)
         self.show_bar_btn.raise_()
         self.settings.setValue("barHidden", "true" if hidden else "false")
@@ -935,6 +1121,8 @@ class Viewer(QMainWindow):
             self.nav(1, unit=True)
         elif k == Qt.Key_PageUp:
             self.nav(-1)
+        elif k == Qt.Key_Space and self.mode == "video":
+            c.toggle_video()
         elif k in (Qt.Key_PageDown, Qt.Key_Space):
             self.nav(1)
         elif k == Qt.Key_Home:
@@ -964,6 +1152,11 @@ class Viewer(QMainWindow):
             self.set_bar_hidden(self.tb.isVisible())
         else:
             super().keyPressEvent(e)
+
+    def closeEvent(self, e):
+        for c in self.cells:
+            c.stop_video()
+        super().closeEvent(e)
 
 
 class ConfirmDialog(QDialog):
@@ -1055,13 +1248,13 @@ HELP_HTML = f"""
 <li>空白格雙擊，或工具列「開啟資料夾」「選擇圖片」也可以。</li>
 <li>RAR / 7Z 需要 Windows 內建的 tar 或已安裝的 <a style="color:{C_ACCENT.name()}" href="https://www.7-zip.org">7-Zip</a>；有密碼的壓縮檔無法讀取。</li>
 </ul>
-<h3>兩種模式（工具列「模式」或按 <b>M</b>）</h3>
+<h3>三種模式（工具列「模式」；M 切換圖片模式）</h3>
 <ul>
 <li><b>單張模式</b>：每一格各自載入並瀏覽自己的資料夾，各自縮放；操作只影響「已選取」的格子（金色框）。</li>
 <li><b>漫畫模式</b>：所有格子共用同一個資料夾或壓縮檔，像看漫畫一樣依序排列。
 例如選 2×1，按 <b>PageDown</b> 就換成接下來的 2 張；<b>PageUp</b> 回上一頁。在漫畫模式拖入資料夾/壓縮檔會一併取代所有格。</li>
 </ul>
-<h3>排列</h3>
+<h3>影片模式</h3><p>選「影片模式」後開啟影片資料夾，或直接拖入影片自動切換。每格獨立循環播放目前影片；預設保留長寬比例填滿（邊緣裁切），「顯示」可改完整顯示。工具列或右側邊緣浮出的按鈕可開始、暫停、下一部；空白鍵播放／暫停，方向鍵／PageDown 切換影片。只有已選格播放聲音。支援 MP4、MKV、MOV、WebM、AVI 等；實際格式依編碼而定。</p><h3>排列</h3>
 <p>工具列選 1×1、2×1、2×2… 或自行輸入 橫×直（最多 8×8）。「顯示」可選等比延伸、等比填滿、原始大小。</p>
 <h3>翻頁與跳轉</h3>
 <table cellpadding="3">
@@ -1203,6 +1396,41 @@ def main():
     f = app.font()
     f.setFamilies(["Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", f.family()])
     app.setFont(f)
+    # Exercise the actual frozen DLL loader and decoder without touching user settings.
+    if len(sys.argv) == 4 and sys.argv[1] == "--verify-playback":
+        import json
+        from pathlib import Path
+        report = Path(sys.argv[3]).resolve()
+        QSettings.setDefaultFormat(QSettings.IniFormat)
+        QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(report.parent / 'diagnostic-settings'))
+        w = Viewer([])
+        w.set_layout(1, 1)
+        w.load_paths(w.cells[0], [sys.argv[2]])
+        cell = w.cells[0]
+        timer = QTimer(app)
+        elapsed = [0]
+        def verify():
+            elapsed[0] += 100
+            ready = not cell._video_image.isNull()
+            if not ready and not cell._video_error and elapsed[0] < 15000:
+                return
+            result = {'version': __version__, 'ok': ready, 'error': cell._video_error,
+                      'frame_size': [cell._video_image.width(), cell._video_image.height()],
+                      'fit': w.video_fit,
+                      'loops': cell.player.loops() if cell.player else None}
+            if ready:
+                cell.pause_video()
+                result['pause_ok'] = cell.player.playbackState() == QMediaPlayer.PausedState
+                cell.play_video()
+                result['resume_ok'] = cell.player.playbackState() == QMediaPlayer.PlayingState
+                result['ok'] = result['pause_ok'] and result['resume_ok']
+            report.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
+            timer.stop()
+            w.close()
+            app.exit(0 if result['ok'] else 1)
+        timer.timeout.connect(verify)
+        timer.start(100)
+        sys.exit(app.exec())
     w = Viewer([a for a in sys.argv[1:] if os.path.exists(a)])
     w.show()
     sys.exit(app.exec())
