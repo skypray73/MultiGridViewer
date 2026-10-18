@@ -12,7 +12,7 @@ from PySide6.QtCore import QSettings, QPoint, Qt
 from PySide6.QtGui import QImage, QFont
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QPushButton
 from multigrid_viewer import Viewer, STYLE, list_folder
 
 
@@ -37,6 +37,12 @@ class VideoTests(unittest.TestCase):
         im = QImage(80, 40, QImage.Format_RGB32)
         im.fill(Qt.blue)
         im.save(str(cls.folder / 'image.png'))
+        seek_folder = cls.folder / 'seek'
+        seek_folder.mkdir()
+        cls.long_video = seek_folder / 'long.mp4'
+        subprocess.run([ffmpeg, '-v', 'error', '-y', '-f', 'lavfi', '-i',
+                        'color=c=blue:s=320x180:r=10', '-t', '30', '-c:v', 'mpeg4',
+                        str(cls.long_video)], check=True)
 
     @classmethod
     def tearDownClass(cls):
@@ -111,13 +117,77 @@ class VideoTests(unittest.TestCase):
         self.assertTrue(first.audio.isMuted())
         self.assertFalse(second.audio.isMuted())
         self.viewer.select(first)
+        self.assertTrue(first.audio.isMuted(), 'Selection must preserve independent sound choices')
+        self.assertFalse(second.audio.isMuted())
+        QTest.mouseClick(self.viewer.video_sound, Qt.LeftButton)
         self.assertFalse(first.audio.isMuted())
+        self.assertFalse(second.audio.isMuted(), 'Manual unmute must allow multiple panels to sound')
+        self.viewer.select(second)
+        self.assertFalse(first.audio.isMuted())
+        self.assertFalse(second.audio.isMuted())
+        self.viewer.set_layout(2, 1)
+        self.assertFalse(first.audio.isMuted(), 'Resizing must not reset sound')
+        self.viewer.select(first)
+        self.viewer.nav(1)
+        self.assertFalse(first.audio.isMuted())
+        self.assertTrue(second.audio.isMuted(), 'A new source must silence older sources')
+        second._update_zoom_rail(QPoint(second.width() - 1, second.height() // 2))
+        QTest.mouseClick(second.sound_button, Qt.LeftButton)
+        self.assertFalse(second.audio.isMuted())
+        self.assertFalse(first.audio.isMuted())
+        QTest.mouseClick(second.sound_button, Qt.LeftButton)
         self.assertTrue(second.audio.isMuted())
+        first.pause_video()
+        first.play_video()
+        self.assertTrue(second.audio.isMuted(), 'Resume must preserve manual choices')
+        second.toggle_video_sound()
+        self.assertFalse(second.audio.isMuted())
+        self.viewer.load_paths(first, [first.current()])
+        self.assertFalse(first.audio.isMuted())
+        self.assertTrue(second.audio.isMuted(), 'Explicitly reopening a source claims the sound again')
+        self.viewer.select(first)
         self.viewer.clear_cell()
         self.assertTrue(first.player.source().isEmpty())
         self.assertEqual(first.player.playbackState(), QMediaPlayer.StoppedState)
         self.viewer.set_layout(1, 1)
         self.assertTrue(second.player.source().isEmpty())
+
+    def test_timeline_seek_and_video_shortcuts(self):
+        cell = self.viewer.cells[0]
+        self.viewer.load_paths(cell, [str(self.long_video)])
+        self.wait_for(lambda: cell.player is not None and cell.player.isSeekable()
+                      and cell.player.duration() >= 29000 and not cell._video_image.isNull())
+        cell.pause_video()
+        slider = self.viewer.video_seek
+        self.assertTrue(slider.isEnabled())
+        self.assertEqual(slider.maximum(), 30000)
+        QTest.mouseClick(slider, Qt.LeftButton, pos=QPoint(slider.width() // 2, slider.height() // 2))
+        self.assertAlmostEqual(cell.player.position(), 15000, delta=600)
+        QTest.mousePress(slider, Qt.LeftButton, pos=QPoint(slider.width() // 3, slider.height() // 2))
+        QTest.mouseMove(slider, QPoint(slider.width() * 3 // 4, slider.height() // 2))
+        QTest.mouseRelease(slider, Qt.LeftButton, pos=QPoint(slider.width() * 3 // 4, slider.height() // 2))
+        self.assertAlmostEqual(cell.player.position(), 22500, delta=700)
+        cell.seek_video(15000)
+        QTest.keyClick(self.viewer, Qt.Key_Left)
+        self.assertEqual(cell.player.position(), 5000)
+        QTest.keyClick(self.viewer, Qt.Key_Right)
+        self.assertEqual(cell.player.position(), 15000)
+        self.assertEqual(cell.idx, 0)
+        buttons = {button.text(): button for button in self.viewer.video_tb.findChildren(QPushButton)}
+        QTest.mouseClick(buttons['+10秒'], Qt.LeftButton)
+        self.assertEqual(cell.player.position(), 25000)
+        QTest.mouseClick(buttons['−10秒'], Qt.LeftButton)
+        self.assertEqual(cell.player.position(), 15000)
+        cell.seek_by(-60000)
+        self.assertEqual(cell.player.position(), 0)
+        cell.seek_by(60000)
+        self.assertEqual(cell.player.position(), cell.player.duration())
+        self.assertEqual(cell.player.playbackState(), QMediaPlayer.PausedState)
+        self.viewer.select(self.viewer.cells[1])
+        self.assertFalse(slider.isEnabled())
+        self.assertEqual(self.viewer.video_clock.text(), '00:00 / 00:00')
+        self.viewer.select(cell)
+        self.assertTrue(slider.isEnabled())
 
     def test_invalid_video_recovers(self):
         bad = self.folder / '00-broken.mp4'

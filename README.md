@@ -10,11 +10,11 @@
 
 A grid-based offline image viewer for side-by-side comparison. Each panel browses its own folder and keeps its own zoom.
 
-**版本** 1.2.0 · 2026/10/18 · **製作人** Skypray Huang · **授權** MIT
+**版本** 1.3.0 · 2026/10/18 · **製作人** Skypray Huang · **授權** MIT
 
 ## 下載
 
-Windows 使用者請到 [Releases](https://github.com/skypray73/MultiGridViewer/releases/latest) 下載 `MultiGridViewer-Portable-v1.2.0.zip`，完整解壓縮後執行裡面的 `MultiGridViewer.exe`，不需安裝 Python。請保留同層 `_internal` 資料夾。
+Windows 使用者請到 [Releases](https://github.com/skypray73/MultiGridViewer/releases/latest) 下載 `MultiGridViewer-Portable-v1.3.0.zip`，完整解壓縮後執行裡面的 `MultiGridViewer.exe`，不需安裝 Python。請保留同層 `_internal` 資料夾。
 （執行檔未經簽章，Windows SmartScreen 可能出現警告，請按「其他資訊」→「仍要執行」。）
 
 ## 功能
@@ -44,7 +44,7 @@ Windows 可直接雙擊 `run_viewer.bat`（第一次會自動安裝套件）。
 
 ### 打包成 exe（Windows）
 
-雙擊 `build_exe.bat`，完成後可攜 ZIP 位於 `dist\MultiGridViewer-Portable-v1.2.0.zip`，可複製到沒有 Python 的電腦使用。
+雙擊 `build_exe.bat`，完成後可攜 ZIP 位於 `dist\MultiGridViewer-Portable-v1.3.0.zip`，可複製到沒有 Python 的電腦使用。
 對圖片按右鍵 →「開啟檔案」→ 選此 exe，即可設為預設看圖程式。
 
 ## 操作
@@ -93,8 +93,8 @@ Privacy policy: This program will not transfer any information to other networke
 - 直接拖入影片會自動切換「影片模式」；或先選影片模式再開啟資料夾，載入其中的影片。
 - 每格各自循環播放目前影片，播放結束後不會自動切換下一部。
 - 預設保留長寬比例填滿分框，超出的邊緣會裁切；「顯示」可改為完整顯示。
-- 工具列與右側邊緣浮出的控制可開始、暫停、上一部、下一部；空白鍵播放／暫停，PageUp 上一部、PageDown 下一部（方向鍵也可切換）。
-- 多格同時播放時，只有已選格發聲，避免聲音互相干擾。
+- 工具列與右側邊緣浮出的控制可開始、暫停、上一部、下一部；空白鍵播放／暫停，PageUp 上一部、PageDown 下一部（影片模式的 ←／→ 改為前後 10 秒）。
+- 每格聲音可獨立開關；載入新影片時只保留最新一部發聲，其他格可手動重新開啟，選格不改變聲音。
 - 支援 MP4、MKV、MOV、WebM、AVI、M4V、WMV、MPEG、TS 等，實際支援依影片編碼而定。
 - 圖片與漫畫模式保留原本的瀏覽、縮放、拖曳與刪除功能，切換模式會保留各格清單。
 - Python、Qt、FFmpeg 解碼 DLL 和 HEIF 元件放在 `_internal`，主程式 EXE 不再內嵌大型依賴。無須額外下載 ffmpeg.exe。
@@ -115,3 +115,12 @@ python build_portable.py --package-only
 ```powershell
 MultiGridViewer.exe --verify-playback sample.mp4 result.json
 ```
+
+## 1.3.0：獨立聲音與可拖曳時間軸
+
+- 各分框右側浮出控制列都有 🔊／🔇 聲音按鈕；點擊即可各自開啟或靜音。
+- 載入新影片時，預設只有最後載入的一部開聲，其他格靜音。可手動同時開啟多格聲音；選格、暫停、繼續、跳轉不會覆寫設定。
+- 同一列播放工具列包含開始、暫停、上一部、下一部、後退／前進 10 秒、聲音切換、目前／總時間與可點擊／拖曳的時間軸，操作目前選取格。
+- ← 後退 10 秒，→ 前進 10 秒；只在片頭／片尾範圍內跳轉，暫停時拖曳不會自動播放。
+- PageUp 上一部、PageDown 下一部；影片模式不再用上下方向鍵或滾輪換片。空白鍵仍為播放／暫停。
+- 保留等比填滿、單部循環、圖片／漫畫模式，以及 QtCore ICU 啟動修正。

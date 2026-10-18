@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-多格看圖器 MultiGrid Viewer  v1.2.0  (2026/10/18)
+多格看圖器 MultiGrid Viewer  v1.3.0  (2026/10/18)
 Copyright (c) 2026 Skypray Huang — MIT License
 
 需求: Python 3.10+ (建議 3.13)   ->   pip install -r requirements.txt
@@ -16,7 +16,7 @@ Copyright (c) 2026 Skypray Huang — MIT License
   第一/最後    Home / End
   刪除圖片     Delete（會先跳出確認視窗，←/→ 或滑鼠選擇，Enter 確認，圖片移到資源回收筒）
   壓縮檔       可拖入 ZIP / RAR / 7Z（CBZ/CBR/CB7），自動讀取內部圖片
-  影片         影片模式：每格單部循環，預設等比填滿；空白鍵播放／暫停，PageUp 上一部／PageDown 下一部
+  影片         影片模式：每格單部循環，預設等比填滿；空白鍵播放／暫停，PageUp 上一部／PageDown 下一部；←／→ 後退／前進 10 秒
   模式         單張模式（每格各自瀏覽）/ 漫畫模式（所有格共用同一資料夾或壓縮檔，PageDown 翻整頁），M 鍵切換
   縮放         滑鼠移到每格右側邊緣顯示 + / − / 1:1、Ctrl+滾輪(以游標為中心)、鍵盤 + -
   恢復填滿     /（或 0）= 已選格回到原本等比延伸畫面；* = 全部格子恢復
@@ -43,7 +43,7 @@ from PySide6.QtGui import (QColor, QCursor, QFont, QFontMetrics, QImage, QImageR
 from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFileDialog, QGridLayout,
                                QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton,
                                QSizePolicy, QSpinBox, QTextBrowser, QToolBar, QToolButton,
-                               QVBoxLayout, QWidget)
+                               QVBoxLayout, QWidget, QSlider, QStyle, QStyleOptionSlider)
 
 # HEIC / HEIF (iPhone photos) via Pillow + pillow-heif:  pip install pillow pillow-heif
 try:
@@ -60,7 +60,7 @@ except Exception:
 
 APP_NAME = "多格看圖器"
 APP_NAME_EN = "MultiGrid Viewer"
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 RELEASE_DATE = "2026/10/18"
 AUTHOR = "Skypray Huang"
 GITHUB_URL = "https://github.com/skypray73/MultiGridViewer"
@@ -232,6 +232,59 @@ class PixCache:
         self.bytes = 0
 
 
+def media_time(milliseconds):
+    seconds = max(0, int(milliseconds)) // 1000
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours}:{minutes:02}:{seconds:02}" if hours else f"{minutes:02}:{seconds:02}"
+
+
+class SeekSlider(QSlider):
+    """Click anywhere or drag to seek; keep keyboard shortcuts with the viewer."""
+    seekRequested = Signal(int)
+
+    def __init__(self):
+        super().__init__(Qt.Horizontal)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setMinimumWidth(120)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.setToolTip("點擊或拖曳跳轉播放位置；←／→ 後退／前進 10 秒")
+
+    def _seek_at(self, e):
+        option = QStyleOptionSlider()
+        self.initStyleOption(option)
+        groove = self.style().subControlRect(QStyle.CC_Slider, option, QStyle.SC_SliderGroove, self)
+        handle = self.style().subControlRect(QStyle.CC_Slider, option, QStyle.SC_SliderHandle, self)
+        span = max(1, groove.width() - handle.width())
+        offset = round(e.position().x() - groove.x() - handle.width() / 2)
+        value = QStyle.sliderValueFromPosition(self.minimum(), self.maximum(), offset, span, option.upsideDown)
+        self.setValue(value)
+        self.seekRequested.emit(value)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton and self.isEnabled():
+            self.setSliderDown(True)
+            self._seek_at(e)
+            e.accept()
+        else:
+            super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if self.isSliderDown():
+            self._seek_at(e)
+            e.accept()
+        else:
+            super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.LeftButton and self.isSliderDown():
+            self._seek_at(e)
+            self.setSliderDown(False)
+            e.accept()
+        else:
+            super().mouseReleaseEvent(e)
+
+
 class Cell(QWidget):
     pressed = Signal(object)
 
@@ -248,6 +301,7 @@ class Cell(QWidget):
         self._video_path = None
         self._video_image = QImage()
         self._video_error = ""
+        self.video_muted = True
         self.setAcceptDrops(True)
         self.setFocusPolicy(Qt.NoFocus)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -274,6 +328,8 @@ class Cell(QWidget):
             self._zbtn("⏮", "上一部影片（PageUp）", lambda: self.viewer.nav(-1)),
             self._zbtn("⏭", "下一部影片（PageDown）", lambda: self.viewer.nav(1)),
         ]
+        self.sound_button = self._zbtn("🔇", "開啟這格聲音", self.toggle_video_sound)
+        self.video_buttons.append(self.sound_button)
         for button in self.video_buttons:
             lay.addWidget(button, 0, Qt.AlignHCenter)
             button.hide()
@@ -312,7 +368,7 @@ class Cell(QWidget):
 
     def set_items(self, items, idx=0):
         self.items, self.idx = items, max(0, min(idx, len(items) - 1)) if items else 0
-        self.sync_media()
+        self.sync_media(restart=True)
         self.reset_zoom()
 
     def step(self, d):
@@ -338,7 +394,7 @@ class Cell(QWidget):
 
     # Video frames share the image canvas, so selection, captions, hover controls,
     # zoom and pan work without a native video window covering the overlays.
-    def sync_media(self):
+    def sync_media(self, restart=False):
         video = self.viewer.mode == "video"
         for widget in (self.b_in, self.pct, self.b_out, self.b_reset):
             widget.setVisible(not video)
@@ -350,7 +406,7 @@ class Cell(QWidget):
         if not path or not is_video(path):
             self.stop_video()
             return
-        if path == self._video_path:
+        if path == self._video_path and not restart:
             return
         self.stop_video()
         if self.player is None:
@@ -362,8 +418,11 @@ class Cell(QWidget):
             self.player.setLoops(QMediaPlayer.Infinite)
             self.sink.videoFrameChanged.connect(self._video_frame)
             self.player.errorOccurred.connect(self._video_failed)
+            for signal in (self.player.positionChanged, self.player.durationChanged,
+                           self.player.seekableChanged, self.player.playbackStateChanged):
+                signal.connect(lambda *_: self.viewer.sync_video_controls(self))
         self._video_path = path
-        self.audio.setMuted(not self.selected)
+        self.viewer.claim_video_sound(self)
         self.player.setSource(QUrl.fromLocalFile(os.path.abspath(path)))
         self.player.play()
 
@@ -384,6 +443,32 @@ class Cell(QWidget):
             self.player.setSource(QUrl())
         self._video_image = QImage()
         self._video_error = ""
+        self.set_video_muted(True)
+        self.viewer.sync_video_controls(self)
+
+    def set_video_muted(self, muted):
+        self.video_muted = bool(muted)
+        if self.audio is not None:
+            self.audio.setMuted(self.video_muted)
+        self.sound_button.setText("🔇" if self.video_muted else "🔊")
+        self.sound_button.setToolTip("開啟這格聲音" if self.video_muted else "關閉這格聲音")
+        self.sound_button.setEnabled(bool(self._video_path))
+
+    def toggle_video_sound(self):
+        if self._video_path:
+            self.set_video_muted(not self.video_muted)
+            self.viewer.sync_video_controls(self)
+
+    def seek_video(self, milliseconds):
+        if not self._video_path or not self.player.isSeekable():
+            return False
+        self.player.setPosition(max(0, min(int(milliseconds), self.player.duration())))
+        self.viewer.sync_video_controls(self)
+        return True
+
+    def seek_by(self, milliseconds):
+        if self._video_path:
+            self.seek_video(self.player.position() + milliseconds)
 
     def play_video(self):
         self.sync_media()
@@ -544,6 +629,9 @@ class Cell(QWidget):
         if e.modifiers() & Qt.ControlModifier:
             self.pressed.emit(self)
             self.zoom_at(pow(1.0015, d), e.position())
+            return
+        if self.viewer.mode == "video":
+            e.accept()
             return
         self._wheel += d
         if abs(self._wheel) >= 60:                # one mouse notch = 120
@@ -721,16 +809,59 @@ class Viewer(QMainWindow):
         for label, callback in (("▶ 開始", lambda: self.cells[self.active].play_video()),
                                 ("Ⅱ 暫停", lambda: self.cells[self.active].pause_video()),
                                 ("◀ 上一部", lambda: self.nav(-1)),
-                                ("下一部 ▶", lambda: self.nav(1))):
+                                ("下一部 ▶", lambda: self.nav(1)),
+                                ("−10秒", lambda: self.cells[self.active].seek_by(-10000)),
+                                ("+10秒", lambda: self.cells[self.active].seek_by(10000))):
             button = QPushButton(label)
             button.setFocusPolicy(Qt.NoFocus)
             if "上一部" in label:
                 button.setToolTip("上一部影片（PageUp）")
             elif "下一部" in label:
                 button.setToolTip("下一部影片（PageDown）")
+            elif label == "−10秒":
+                button.setToolTip("後退 10 秒（←）")
+            elif label == "+10秒":
+                button.setToolTip("前進 10 秒（→）")
             button.clicked.connect(callback)
             self.video_tb.addWidget(button)
-        self.video_tb.addWidget(QLabel("  PageUp 上一部／PageDown 下一部 · 空白鍵播放／暫停 · 單部循環 · 已選格發聲  "))
+        self.video_sound = QPushButton("🔇")
+        self.video_sound.setFocusPolicy(Qt.NoFocus)
+        self.video_sound.clicked.connect(lambda: self.cells[self.active].toggle_video_sound())
+        self.video_tb.addWidget(self.video_sound)
+        self.video_clock = QLabel("00:00 / 00:00")
+        self.video_clock.setMinimumWidth(105)
+        self.video_tb.addWidget(self.video_clock)
+        self.video_seek = SeekSlider()
+        self.video_seek.seekRequested.connect(lambda position: self.cells[self.active].seek_video(position))
+        self.video_tb.addWidget(self.video_seek)
+        self.video_tb.addWidget(QLabel("  ←／→ ±10秒 · PageUp／Down 換片  "))
+        self.sync_video_controls()
+
+    def sync_video_controls(self, changed_cell=None):
+        if not self.cells or not hasattr(self, 'video_seek'):
+            return
+        cell = self.cells[self.active]
+        if changed_cell is not None and changed_cell is not cell:
+            return
+        loaded = self.mode == "video" and bool(cell._video_path) and cell.player is not None
+        duration = cell.player.duration() if loaded else 0
+        position = cell.player.position() if loaded else 0
+        self.video_sound.setText("🔇" if cell.video_muted else "🔊")
+        self.video_sound.setToolTip("開啟已選格聲音" if cell.video_muted else "關閉已選格聲音")
+        self.video_sound.setEnabled(loaded)
+        self.video_seek.setEnabled(loaded and duration > 0 and cell.player.isSeekable())
+        self.video_seek.setRange(0, max(1, duration))
+        if not self.video_seek.isSliderDown():
+            self.video_seek.setValue(position)
+        shown = self.video_seek.value() if self.video_seek.isSliderDown() else position
+        self.video_clock.setText(f"{media_time(shown)} / {media_time(duration)}")
+
+    def claim_video_sound(self, newest):
+        # Only loading a new source changes the default sound owner. Selecting,
+        # pausing, resuming and seeking preserve all manual per-panel choices.
+        for cell in self.cells:
+            cell.set_video_muted(cell is not newest)
+        self.sync_video_controls()
 
     def sync_controls(self):
         for sp, v in ((self.sp_cols, self.cols), (self.sp_rows, self.rows)):
@@ -745,6 +876,7 @@ class Viewer(QMainWindow):
         self.cb_fit.blockSignals(True)
         self.cb_fit.setCurrentIndex([key for key, _ in FIT_MODES].index(fit))
         self.cb_fit.blockSignals(False)
+        self.sync_video_controls()
 
     def update_status(self):
         c = self.cells[self.active]
@@ -794,8 +926,6 @@ class Viewer(QMainWindow):
         for i, c in enumerate(self.cells):
             c.selected = i == self.active
             c.sync_media()
-            if c.audio is not None:
-                c.audio.setMuted(not c.selected)
             c.update()
         self.sync_controls()
         if self.mode == "comic":
@@ -825,10 +955,9 @@ class Viewer(QMainWindow):
             self.active = i
             for j, c in enumerate(self.cells):
                 c.selected = j == i
-                if c.audio is not None:
-                    c.audio.setMuted(not c.selected)
                 c.update()
         self.update_status()
+        self.sync_video_controls()
 
     # ---------- navigation ----------
     def nav(self, d, unit=False):
@@ -1121,7 +1250,11 @@ class Viewer(QMainWindow):
     def keyPressEvent(self, e):
         k = e.key()
         c = self.cells[self.active]
-        if k in (Qt.Key_Left, Qt.Key_Up):
+        if self.mode == "video" and k in (Qt.Key_Left, Qt.Key_Right):
+            c.seek_by(-10000 if k == Qt.Key_Left else 10000)
+        elif self.mode == "video" and k in (Qt.Key_Up, Qt.Key_Down):
+            e.accept()
+        elif k in (Qt.Key_Left, Qt.Key_Up):
             self.nav(-1, unit=True)
         elif k in (Qt.Key_Right, Qt.Key_Down):
             self.nav(1, unit=True)
@@ -1260,7 +1393,7 @@ HELP_HTML = f"""
 <li><b>漫畫模式</b>：所有格子共用同一個資料夾或壓縮檔，像看漫畫一樣依序排列。
 例如選 2×1，按 <b>PageDown</b> 就換成接下來的 2 張；<b>PageUp</b> 回上一頁。在漫畫模式拖入資料夾/壓縮檔會一併取代所有格。</li>
 </ul>
-<h3>影片模式</h3><p>選「影片模式」後開啟影片資料夾，或直接拖入影片自動切換。每格獨立循環播放目前影片；預設保留長寬比例填滿（邊緣裁切），「顯示」可改完整顯示。工具列或右側邊緣浮出的按鈕可開始、暫停、上一部、下一部；空白鍵播放／暫停，PageUp 上一部、PageDown 下一部（方向鍵也可切換）。只有已選格播放聲音。支援 MP4、MKV、MOV、WebM、AVI 等；實際格式依編碼而定。</p><h3>排列</h3>
+<h3>影片模式</h3><p>選「影片模式」後開啟影片資料夾，或直接拖入影片自動切換。每格獨立循環播放目前影片；預設保留長寬比例填滿（邊緣裁切），「顯示」可改完整顯示。工具列或右側邊緣浮出的按鈕可開始、暫停、上一部、下一部；空白鍵播放／暫停，PageUp 上一部、PageDown 下一部；←／→ 後退／前進 10 秒。播放工具列上的時間軸可點擊或拖曳跳轉。每格的 🔊／🔇 可各自開關聲音；新載入影片預設只保留最新一部發聲，其他格可手動開啟，選格不會改動聲音。支援 MP4、MKV、MOV、WebM、AVI 等；實際格式依編碼而定。</p><h3>排列</h3>
 <p>工具列選 1×1、2×1、2×2… 或自行輸入 橫×直（最多 8×8）。「顯示」可選等比延伸、等比填滿、原始大小。</p>
 <h3>翻頁與跳轉</h3>
 <table cellpadding="3">
@@ -1427,9 +1560,14 @@ def main():
             if ready:
                 cell.pause_video()
                 result['pause_ok'] = cell.player.playbackState() == QMediaPlayer.PausedState
+                result['seek_ok'] = cell.seek_video(cell.player.duration() // 2)
+                cell.toggle_video_sound()
+                muted = cell.audio.isMuted()
+                cell.toggle_video_sound()
+                result['mute_toggle_ok'] = muted and not cell.audio.isMuted()
                 cell.play_video()
                 result['resume_ok'] = cell.player.playbackState() == QMediaPlayer.PlayingState
-                result['ok'] = result['pause_ok'] and result['resume_ok']
+                result['ok'] = all(result[key] for key in ('pause_ok', 'resume_ok', 'seek_ok', 'mute_toggle_ok'))
             report.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
             timer.stop()
             w.close()

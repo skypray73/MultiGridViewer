@@ -81,13 +81,13 @@ def package():
     (folder / '使用說明.txt').write_text(
         '請完整解壓縮 ZIP，再執行 MultiGridViewer.exe。\n'
         '保留 _internal 資料夾，內含 Python、Qt、FFmpeg DLL 與圖片解碼元件。\n'
-        '影片模式：每格單部循環；右側邊緣浮出播放／暫停／上一部／下一部；PageUp 上一部、PageDown 下一部。\n'
-        '預設等比填滿（邊緣裁切）；顯示選單可切換完整顯示。\n', encoding='utf-8')
-    archive = Path(shutil.make_archive(str(ROOT / 'dist/MultiGridViewer-Portable-v1.2.0'),
+        '影片模式：每格單部循環；右側邊緣浮出播放／暫停／上一部／下一部；PageUp 上一部、PageDown 下一部；←／→ 前後 10 秒。\n'
+        '同列時間軸可點擊或拖曳；每格 🔊／🔇 可獨立切換聲音。\n新開影片預設只有最後一部發聲，其他格可手動開啟。\n預設等比填滿（邊緣裁切）；顯示選單可切換完整顯示。\n', encoding='utf-8')
+    archive = Path(shutil.make_archive(str(ROOT / 'dist/MultiGridViewer-Portable-v1.3.0'),
                                       'zip', folder.parent, folder.name))
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     archive.with_suffix('.zip.sha256').write_text(digest + '  ' + archive.name + '\n', encoding='ascii')
-    source_zip = ROOT / 'dist/MultiGridViewer-Source-v1.2.0.zip'
+    source_zip = ROOT / 'dist/MultiGridViewer-Source-v1.3.0.zip'
     paths = subprocess.check_output(['git', '-C', str(ROOT), 'ls-files', '-z',
                                      '--cached', '--others', '--exclude-standard']).decode().split('\0')
     with zipfile.ZipFile(source_zip, 'w', zipfile.ZIP_DEFLATED) as bundle:
